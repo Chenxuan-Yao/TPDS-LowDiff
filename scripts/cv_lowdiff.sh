@@ -18,7 +18,7 @@ SAVE_DIR=/data/lowdiff
 RESUME=0
 
 # Distributed training with DeepSpeed
-deepspeed --hostfil=hostfile ./torch/cv.py \
+deepspeed --hostfile=hostfile ./torch/cv.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \

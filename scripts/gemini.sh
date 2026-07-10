@@ -15,7 +15,7 @@ COMPRESSOR_RATIO=0.01
 SAVE_DIR=/data/checkfreq
 
 # Distributed training with DeepSpeed
-deepspeed --hostfil=hostfile ./torch/gemini.py \
+deepspeed --hostfile=hostfile ./torch/gemini.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \

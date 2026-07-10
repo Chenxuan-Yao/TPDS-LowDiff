@@ -14,7 +14,7 @@ FREQ=10
 SAVE_DIR=/data/dc
 
 # Distributed training with DeepSpeed
-deepspeed --hostfil=hostfile ./torch/DC.py \
+deepspeed --hostfile=hostfile ./torch/DC.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \

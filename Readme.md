@@ -15,25 +15,31 @@ This paper proposes LowDiff, an efficient frequent checkpointing framework that 
 - CUDA-12.4
 - NCCL-2.23.4 
 - OpenMPI-4.0.5 
-- Python-3.10.15 
+- Python >= 3.11
 - PyTorch-2.6.0 
 - Deepspeed-0.16.4
 
-### Conda environment
-``` 
-conda create -n LowDiff python=3.10
-conda activate LowDiff
-pip install -r requirements.txt 
+### Python environment
+LowDiff uses [uv](https://docs.astral.sh/uv/) to manage the Python environment and dependencies.
+
+Install uv first if it is not available:
+```
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then create the virtual environment and install dependencies from the lockfile:
+```
+uv sync --locked
 ```
 
 ## Quick start
 To run CV jobs:
 ```
-bash ./scripts/cv_lowdiff.sh
+uv run zsh ./scripts/cv_lowdiff.sh
 ```
 To run NLP jobs:
 ```
-bash ./scripts/gpt_lowdiff.sh
+uv run zsh ./scripts/gpt_lowdiff.sh
 ```
 
 ## Datasets

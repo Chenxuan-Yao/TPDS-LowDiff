@@ -18,7 +18,7 @@ SAVE_DIR=/data/lowdiff
 RESUME=0
 
 # Distributed training with DeepSpeed
-deepspeed --hostfil=gpt_hostfile ./torch/GPT.py \
+deepspeed --hostfile=gpt_hostfile ./torch/GPT.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \
