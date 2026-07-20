@@ -1,5 +1,3 @@
-# We implement Gemini as checkfreq style with Ramdisk for checkpointing
-
 import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -15,7 +13,7 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 import deepspeed
 from deepspeed import comm as dist
-from communicator.comm import Communicator
+from communicator.topk_allgather import TopKAllGatherCommunicator
 import torch.multiprocessing as mp
 mp.set_start_method('spawn', force=True)
 from torch.multiprocessing import Value, Lock
@@ -105,7 +103,7 @@ def main():
     model.enable_backward_allreduce = False
     
     # Use the Communicator class
-    communicator = Communicator(model)
+    communicator = TopKAllGatherCommunicator(model)
     communicator.register_hooks()
     
     criterion = nn.CrossEntropyLoss()

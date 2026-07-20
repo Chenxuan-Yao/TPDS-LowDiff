@@ -1,32 +1,25 @@
 #!/bin/zsh
-
+# We implement Gemni as checkfreq style with Ramdisk for checkpointing
 # Set environment variables
 export MASTER_ADDR=localhost
 export MASTER_PORT=29500
 export NCCL_IB_DISABLE=1
 
 # Training parameters
-DATASET=wikitext-2
-MODEL=gpt2-large
+DATASET=cifar100
+MODEL=resnet50
 EPOCHS=10
-BATCH_SIZE=4
+BATCH_SIZE=64
 COMPRESSOR=topk
 COMPRESSOR_RATIO=0.01
-FREQ=100
-SAVE_BATCH_FREQ=20
-SAVE_DIR=/data/lowdiff
-RESUME=0
+SAVE_DIR=/data/checkfreq
 
 # Distributed training with DeepSpeed
-deepspeed --hostfile=gpt_hostfile ./torch/GPT.py \
+deepspeed --hostfile=hostfile ./torch/cv_gemini.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \
   --batch-size $BATCH_SIZE \
   --compressor $COMPRESSOR \
   --compressor_ratio $COMPRESSOR_RATIO \
-  --diff \
-  --freq $FREQ \
-  --save-batch-freq $SAVE_BATCH_FREQ \
-  --save-dir $SAVE_DIR \
-  --resume $RESUME
+  --save-dir $SAVE_DIR 

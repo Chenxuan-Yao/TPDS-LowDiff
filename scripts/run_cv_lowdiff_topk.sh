@@ -6,20 +6,27 @@ export MASTER_PORT=29500
 export NCCL_IB_DISABLE=1
 
 # Training parameters
-DATASET=cifar100
-MODEL=resnet50
+DATASET=imagenet
+MODEL=vgg19
 EPOCHS=10
 BATCH_SIZE=64
 COMPRESSOR=topk
 COMPRESSOR_RATIO=0.01
-SAVE_DIR=/data/checkfreq
+FREQ=50
+SAVE_BATCH_FREQ=1
+SAVE_DIR=/ssd/ycx/lowdiff
+RESUME=0
 
 # Distributed training with DeepSpeed
-deepspeed --hostfile=hostfile ./torch/checkfreq.py \
+deepspeed --hostfile=hostfile ./torch/cv_lowdiff_topk.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \
   --batch-size $BATCH_SIZE \
   --compressor $COMPRESSOR \
   --compressor_ratio $COMPRESSOR_RATIO \
-  --save-dir $SAVE_DIR 
+  --diff \
+  --freq $FREQ \
+  --save-batch-freq $SAVE_BATCH_FREQ \
+  --save-dir $SAVE_DIR \
+  --resume $RESUME

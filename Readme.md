@@ -35,11 +35,59 @@ uv sync --locked
 ## Quick start
 To run CV jobs:
 ```
-uv run zsh ./scripts/cv_lowdiff.sh
+uv run zsh ./scripts/run_cv_lowdiff_topk.sh
 ```
 To run NLP jobs:
 ```
-uv run zsh ./scripts/gpt_lowdiff.sh
+uv run zsh ./scripts/run_gpt_lowdiff_topk.sh
+```
+
+To run the uncompressed LowDiff+ path (layer-wise AllReduce, asynchronous CPU
+model updates, and periodic full checkpoints):
+```
+uv run zsh ./scripts/run_cv_lowdiff_plus_allreduce.sh
+```
+The checkpoint interval defaults to 50 optimizer steps and can be changed with
+`CHECKPOINT_FREQ`.  For example, checkpoint every step and resume later with:
+```
+CHECKPOINT_FREQ=1 SAVE_DIR=/data/lowdiff-plus uv run zsh ./scripts/run_cv_lowdiff_plus_allreduce.sh
+RESUME_FROM=/data/lowdiff-plus/lowdiff_plus_resnet101_imagenet_step100.pth.tar \
+  uv run zsh ./scripts/run_cv_lowdiff_plus_allreduce.sh
+```
+LowDiff+ currently expects one backward pass per optimizer step and a regular
+PyTorch optimizer whose update is supported on CPU (the example uses Adam).
+
+For the full-checkpoint CheckFreq baseline with uncompressed AllReduce, run:
+```
+uv run zsh ./scripts/run_cv_checkfreq_allreduce.sh
+```
+
+To run Qwen2.5-1.5B with LowDiff:
+```
+uv run zsh ./scripts/run_qwen_lowdiff_topk.sh
+```
+The script defaults to the local WikiText-103 training split at
+`/hdd/dataset/nlp/transformer/wikitext-103/train.txt`.  For continued
+pre-training on another local corpus, pass a plain-text or JSONL file through
+`DATASET_PATH`, for example:
+```
+DATASET_PATH=/data/corpus.jsonl uv run zsh ./scripts/run_qwen_lowdiff_topk.sh
+```
+JSON/JSONL input must have a `text` field (or pass `--text-column` when
+invoking `torch/qwen_lowdiff_topk.py` directly).  For a representative LowDiff benchmark,
+use WikiText-103; for a useful Chinese continued-pretraining run, replace it
+with a licensed, cleaned Chinese corpus in the local JSONL format.
+
+The Qwen script caches the tokenized Arrow dataset at
+`/ssd/ycx/huggingface-cache/datasets` by default, so later runs with the same
+model, corpus, and sequence length reuse tokenization.  Set
+`OVERWRITE_TOKENIZED_CACHE=1` to rebuild it, or override `HF_DATASETS_CACHE`
+to choose another cache location.
+
+For the Qwen checkfreq baseline (Top-K compressed training gradients and one
+full model-and-optimizer checkpoint per optimizer step), run:
+```
+uv run zsh ./scripts/run_qwen_checkfreq_topk.sh
 ```
 
 ## Datasets

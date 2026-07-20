@@ -1,5 +1,5 @@
 #!/bin/zsh
-# We implement Gemni as checkfreq style with Ramdisk for checkpointing
+
 # Set environment variables
 export MASTER_ADDR=localhost
 export MASTER_PORT=29500
@@ -15,7 +15,7 @@ COMPRESSOR_RATIO=0.01
 SAVE_DIR=/data/checkfreq
 
 # Distributed training with DeepSpeed
-deepspeed --hostfile=hostfile ./torch/gemini.py \
+deepspeed --hostfile=hostfile ./torch/cv_checkfreq_topk.py \
   --dataset $DATASET \
   --model $MODEL \
   --epochs $EPOCHS \

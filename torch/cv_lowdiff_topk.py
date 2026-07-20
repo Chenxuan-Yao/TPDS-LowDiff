@@ -14,7 +14,7 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 import deepspeed
 from deepspeed import comm as dist
-from communicator.lowdiff import Communicator
+from communicator.lowdiff_topk import LowDiffTopKCommunicator
 import torch.multiprocessing as mp
 mp.set_start_method('spawn',force=True)
 import re
@@ -53,7 +53,7 @@ def main():
     # Load dataset
     if args.dataset == 'imagenet':
         dataset = datasets.ImageFolder(
-            '/data/dataset/cv/imagenet_0908/train',
+            '/hdd/dataset/cv/imagenet_0908/train',
             transform=transforms.Compose([
                 transforms.RandomResizedCrop(224),
                 transforms.RandomHorizontalFlip(),
@@ -65,7 +65,7 @@ def main():
 
     elif args.dataset == 'cifar100':
         dataset = datasets.CIFAR100(
-            '/data/dataset/cv/cifar100/train',
+            '/hdd/dataset/cv/cifar100/train',
             train=True,
             transform=transforms.Compose([
                 transforms.RandomCrop(32, padding=4),
@@ -119,7 +119,9 @@ def main():
     model.enable_backward_allreduce = False
     
      # Use the Communicator class
-    communicator = Communicator(model, k=args.compress_ratio, save_batch_freq=args.save_batch_freq)
+    communicator = LowDiffTopKCommunicator(
+        model, k=args.compress_ratio, save_batch_freq=args.save_batch_freq
+    )
     communicator.register_hooks()
     
     criterion = nn.CrossEntropyLoss()
@@ -175,7 +177,7 @@ def load_base_checkpoint(model, optimizer):
 def topk_decompress(values, indices, shape):
     tensor_decompressed = torch.zeros(shape).cuda().view(-1)
     for idx, val in zip(indices, values):
-        tensor_decompressed = tensor_decompressed.scatter_add_(0, idx, val)
+        tensor_decompressed = tensor_decompressed.scatter_add_(0, idx.long(), val)
     return tensor_decompressed.view(shape)
 
 def find_max():

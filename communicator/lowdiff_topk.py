@@ -8,8 +8,8 @@ mp.set_start_method('spawn',force=True)
 import datetime
 import time
 
-class Communicator:
-    def __init__(self, model, k=0.01, num_threads=None, save_batch_freq=1):
+class LowDiffTopKCommunicator:
+    def __init__(self, model, k=0.01, num_threads=None, save_batch_freq=1, profile=False):
         """
         Initialize the Communicator for Top-K gradient compression with async all_gather.
 
@@ -23,6 +23,9 @@ class Communicator:
         self.k = k
         self.model = model
         self.compression_data = {}  # Store async work handles and gathered results
+        self.profile_enabled = profile
+        self.profile_active = False
+        self.profile_stats = {}
         
         # Get the number of available CPU threads (default to half of total cores, max 32)
         if num_threads is None:
@@ -40,8 +43,31 @@ class Communicator:
             self.save_process = mp.Process(target=diff_ckpt_saver, args=(self.queue,self.save_batch_freq))
             self.save_process.start()
             print("save process start!")
-        
-        
+
+    def start_profile_step(self):
+        """Start collecting host-side compression timing for one training step."""
+        if self.profile_enabled:
+            self.profile_active = True
+            self.profile_stats = {
+                "topk_launch_s": 0.0,
+                "allgather_launch_s": 0.0,
+                "restore_wait_s": 0.0,
+                "checkpoint_queue_put_s": 0.0,
+            }
+
+    def finish_profile_step(self):
+        """Return and reset the current step's host-side timing counters."""
+        if not self.profile_active:
+            return {}
+        stats = self.profile_stats.copy()
+        self.profile_active = False
+        self.profile_stats = {}
+        return stats
+
+    def _profile_add(self, name, elapsed):
+        if self.profile_active:
+            self.profile_stats[name] = self.profile_stats.get(name, 0.0) + elapsed
+
     def topk_compress(self, tensor):
         """
         Compress the gradient into Top-K format.
@@ -49,10 +75,20 @@ class Communicator:
         num_elements = tensor.numel()
         k_elements = max(1, int(num_elements * self.k))
 
+        # torch.topk/gather require int64 indices, but each flattened parameter
+        # in this communicator must fit in int32 so indices can be stored and
+        # communicated at half the previous cost.
+        if num_elements - 1 > torch.iinfo(torch.int32).max:
+            raise ValueError(
+                f"Parameter with {num_elements} elements exceeds the int32 index range"
+            )
+
+        started = time.perf_counter()
         values, indices = torch.topk(tensor.view(-1).abs(), k_elements, sorted=False)
         values = tensor.view(-1).gather(0, indices)
+        self._profile_add("topk_launch_s", time.perf_counter() - started)
 
-        return indices, values
+        return indices.to(torch.int32), values
         
     def async_send(self, grad, param_name):
         """
@@ -65,8 +101,10 @@ class Communicator:
         gathered_values = [torch.zeros_like(values) for _ in range(world_size)]
         
         # Perform async all_gather
+        started = time.perf_counter()
         work_indices = dist.all_gather(gathered_indices, indices, async_op=True)
         work_values = dist.all_gather(gathered_values, values, async_op=True)
+        self._profile_add("allgather_launch_s", time.perf_counter() - started)
         
         # Store work handles and gathered buffers
         self.compression_data[param_name] = {
@@ -101,31 +139,41 @@ class Communicator:
             restored_grad = torch.zeros(data["grad_shape"], device=data["gathered_values"][0].device).view(-1)
 
             for indices, values in zip(data["gathered_indices"], data["gathered_values"]):
-                restored_grad.scatter_add_(0, indices, values)  # This remains a CPU/GPU task
+                # scatter_add_ requires int64 indices.  Keep the temporary
+                # conversion here so the gathered/checkpoint representation
+                # remains int32.
+                restored_grad.scatter_add_(0, indices.long(), values)
 
             param.grad = restored_grad.view(data["grad_shape"])  # Direct assignment
 
         # Submit tasks to the thread pool and wait for completion
+        restore_started = time.perf_counter()
         futures = [
             self.executor.submit(process_gradient, self.param_dict[name], data)
             for name, data in self.compression_data.items()
         ]
         concurrent.futures.wait(futures)
+        self._profile_add("restore_wait_s", time.perf_counter() - restore_started)
 
         # Clear stored data
         self.compression_data.clear()
         
         # Send the compressed gradients to the save process
         if diff and dist.get_rank() == 0:
-            self.queue.put((self.diff_ckpt,filename,i))
+            enqueued_at = time.perf_counter()
+            self.queue.put((self.diff_ckpt, filename, i, self.profile_active, enqueued_at))
+            self._profile_add("checkpoint_queue_put_s", time.perf_counter() - enqueued_at)
 
     def __del__(self):
         """
         Ensure the thread pool is properly shut down on object destruction.
         """
-        self.executor.shutdown(wait=True)
-        self.queue.put(None)
-        self.save_process.join()
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            executor.shutdown(wait=True)
+        if hasattr(self, "queue"):
+            self.queue.put(None)
+            self.save_process.join()
 
 def diff_ckpt_saver(queue,save_batch_freq):
     """
@@ -144,8 +192,14 @@ def diff_ckpt_saver(queue,save_batch_freq):
         
         if data is None:
             break
-        diff, filename, i = data
+        if len(data) == 3:
+            diff, filename, i = data
+            profile, enqueued_at = False, None
+        else:
+            diff, filename, i, profile, enqueued_at = data
+        snapshot_started = time.perf_counter()
         data = _to_cpu(data)
+        snapshot_seconds = time.perf_counter() - snapshot_started
     
         if save_batch_freq == 1 :
             begin = time.time()
@@ -153,6 +207,13 @@ def diff_ckpt_saver(queue,save_batch_freq):
             end = time.time()
             now = datetime.datetime.now()
             print("Saved {} time: {:.3f}s at {}".format(filename, end - begin, now))
+            if profile:
+                print(
+                    "PROFILE_CKPT step={} queue_wait_s={:.3f} snapshot_cpu_s={:.3f} "
+                    "persist_s={:.3f}".format(
+                        i, snapshot_started - enqueued_at, snapshot_seconds, end - begin
+                    )
+                )
         
         else: 
             batch_buffer[i] = diff
@@ -161,6 +222,13 @@ def diff_ckpt_saver(queue,save_batch_freq):
                 torch.save(batch_buffer, filename)
                 end = time.time()
                 print("Saved {} time: {:.3f}s".format(filename, end - begin))
+                if profile:
+                    print(
+                        "PROFILE_CKPT step={} queue_wait_s={:.3f} snapshot_cpu_s={:.3f} "
+                        "persist_s={:.3f}".format(
+                            i, snapshot_started - enqueued_at, snapshot_seconds, end - begin
+                        )
+                    )
                 batch_buffer={}
 
 def _to_cpu(data):

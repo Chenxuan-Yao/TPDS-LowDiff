@@ -1,7 +1,6 @@
 import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-import threading
 import time
 import argparse
 import torch
@@ -14,7 +13,7 @@ from pathlib import Path
 current_dir = Path(__file__).resolve().parent
 project_root = current_dir.parent
 sys.path.append(str(project_root))
-from communicator.lowdiff import Communicator
+from communicator.lowdiff_topk import LowDiffTopKCommunicator
 import re
 from torch.utils.data import DataLoader, DistributedSampler
 from datasets import load_dataset
@@ -43,11 +42,10 @@ parser.add_argument("--compressor_ratio", default=0.01, type=float, help='choose
 parser.add_argument("--save-dir", default='/data/lowdiff', type=str, help='directory to save checkpoints')
 parser.add_argument("--resume", type=int, default=0, help='resume from checkpoint')
 parser.add_argument("--diff", action="store_true", help='whether to use differential checkpoint')
-parser.add_argument("--freq", default=0, type=int, help='how many iterations to save a full checkpoint')
+parser.add_argument("--freq", default=0, type=int, help='how many iteration to save a full checkpoint')
 parser.add_argument("--save-batch-freq", default='1', type=int, help='in-memory batching frequency')
 parser.add_argument("--seq_length", type=int, default=512)  
 parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-parser.add_argument("--parellel_recovery", type=bool, default=True, help='whether to use parallel recovery')
 args = parser.parse_args()
 
 
@@ -77,7 +75,7 @@ def main():
             padding="max_length"
         )
 
-    # Load and process the wikitext-103 dataset
+    # Load and process wikitext-103 dataset
     if args.dataset == 'wikitext-103':
         dataset = load_dataset("/data/dataset/nlp/transformer/wikitext-103", 
                         data_files={
@@ -103,8 +101,8 @@ def main():
         num_proc=12
     )
 
-    print("Dataset mapping completed successfully.")
-    # Data collator (auto-generates labels)
+    print("Dataset map successfully.")
+    # Data collator (automatically generate labels)
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False  # Use causal language modeling
@@ -135,7 +133,7 @@ def main():
     elif args.model == 'gpt2-large':
         model = GPT2LMHeadModel.from_pretrained("/data/dataset/nlp/openai-community/gpt2-large")
     else:
-        print("Model loading failed.")
+        print("Model loaded fail.")
     model.gradient_checkpointing_enable()  
     model.cuda()
     print("Model loaded successfully.")
@@ -152,6 +150,7 @@ def main():
         },
     }
     model, optimizer, _, _ = deepspeed.initialize(model=model, model_parameters=model.parameters(), config=ds_config)
+    
     # Optionally resume from a checkpoint at rank 0, then broadcast weights to other workers
     if args.resume and dist.get_rank() == 0:
 
@@ -159,15 +158,17 @@ def main():
         if args.save_batch_freq>1:
             model, optimizer = load_batch_differential_checkpoint(model,optimizer)
         else:
-            if args.parellel_recovery:
-                model, optimizer = new_load_differential_checkpoint(model,optimizer, args.compress_ratio, args)
-            else:
-                model, optimizer = load_differential_checkpoint(model,optimizer)
+            model, optimizer = load_differential_checkpoint(model,optimizer)
     
     model.cuda()
-
+    
+    # Initialize DeepSpeed
+    deepspeed.enable_backward_allreduce = False
+    
     # Use the Communicator class
-    communicator = Communicator(model, k=args.compress_ratio, save_batch_freq=args.save_batch_freq)
+    communicator = LowDiffTopKCommunicator(
+        model, k=args.compress_ratio, save_batch_freq=args.save_batch_freq
+    )
     communicator.register_hooks()
 
     # Training loop
@@ -198,7 +199,7 @@ def main():
                             'optimizer' : optimizer.state_dict(),
                         }, '{}/{}_{}_{}_{}_{}_{}_full.pth.tar'.format(args.save_dir,args.model,args.dataset,args.compressor,args.compressor_ratio,epoch,batch_idx))
                         end_full = time.time()
-                        print("Base checkpoint takes {:.3f}s".format(end_full - begin_full))
+                        print("base checkpoint takes {:.3f}s".format(end_full - begin_full))
 
             end = time.time()
 
@@ -209,3 +210,8 @@ def load_base_checkpoint(model, optimizer):
     filedir = args.save_dir
     filepath = filedir + '/' + args.model + '_' + args.dataset + '_' + args.compressor + '_' + str(args.compressor_ratio) + '_' + str(args.resume-1) + '_0_full' + '.pth.tar'
     if os.path.isfile(filepath):
+        print("loading {}".format(filepath))
+        checkpoint = torch.load(filepath)
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        end = time.time()
